@@ -40,6 +40,8 @@ type InstanceSnapshot struct {
 	metav1.TypeMeta `json:",inline" `
 }
 
+func (c *InstanceSnapshot) Destroy() {}
+
 func (c *InstanceSnapshot) SubResourceName() string {
 	return "snapshot"
 }
