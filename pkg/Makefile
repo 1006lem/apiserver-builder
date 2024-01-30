@@ -102,7 +102,7 @@ undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/confi
 
 #CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
 # GOBIN
-CONTROLLER_GEN = /Users/kmkim/go/bin/controller-gen
+CONTROLLER_GEN = $(shell go env GOPATH)/bin/controller-gen
 .PHONY: controller-gen
 controller-gen: ## Download controller-gen locally if necessary.
 	$(call go-get-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.8.0)
