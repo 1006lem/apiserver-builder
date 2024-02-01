@@ -18,7 +18,9 @@ package boanlab
 
 import (
 	"context"
-
+	"fmt"
+	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,6 +32,7 @@ import (
 // InstanceReconciler reconciles a Instance object
 type InstanceReconciler struct {
 	client.Client
+	Log    logr.Logger
 	Scheme *runtime.Scheme
 }
 
@@ -49,7 +52,34 @@ type InstanceReconciler struct {
 func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// load instance
+	var instance boanlabv1.Instance
+	if err := r.Get(ctx, req.NamespacedName, &instance); err != nil {
+		log.Log.Error(err, "unable to fetch Instance")
+		// we'll ignore not-found errors, since they can't be fixed by an immediate
+		// requeue (we'll need to wait for a new notification), and we can get them
+		// on deleted requests.
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// find helper-pod
+	helperPod := &corev1.PodList{}
+	var owner = instance.Spec.Environment.Owner
+	var name = instance.Name
+	// err = a.List(ctx, pods, client.InNamespace(req.Namespace), client.MatchingLabels(rs.Spec.Template.Labels))
+	helperPodName := fmt.Sprintf("%s-%s", owner, name)
+
+	listOpts := []client.ListOption{
+		client.InNamespace(instance.Namespace),
+		//client.InNamespace(req.Namespace),
+		//client.MatchingLabels(labelsForMemcached(instance.Name)),
+		client.MatchingFields{"metadata.name": helperPodName},
+	}
+
+	if err := r.List(ctx, helperPod, listOpts...); err != nil {
+		log.Log.Error(err, "unable to list helper pod", "metadata.name", helperPodName)
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
 }
