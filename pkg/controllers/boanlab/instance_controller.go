@@ -17,16 +17,23 @@ limitations under the License.
 package boanlab
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	minicloudControllerType "github.com/boanlab/mini-cloud-server/controller/api/rest/types"
 	"github.com/go-logr/logr"
+	boanlabv1 "github.com/kubernetes-incubator/apiserver-builder/pkg/pkg/apis/boanlab/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"net/http"
+	"os"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	boanlabv1 "github.com/kubernetes-incubator/apiserver-builder/pkg/pkg/apis/boanlab/v1"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // InstanceReconciler reconciles a Instance object
@@ -42,13 +49,6 @@ type InstanceReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Instance object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.11.0/pkg/reconcile
 func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
 
@@ -56,32 +56,73 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	var instance boanlabv1.Instance
 	if err := r.Get(ctx, req.NamespacedName, &instance); err != nil {
 		log.Log.Error(err, "unable to fetch Instance")
-		// we'll ignore not-found errors, since they can't be fixed by an immediate
-		// requeue (we'll need to wait for a new notification), and we can get them
-		// on deleted requests.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	// find helper-pod
-	helperPod := &corev1.PodList{}
+	helperPod := &corev1.Pod{}
 	var owner = instance.Spec.Environment.Owner
 	var name = instance.Name
 	// err = a.List(ctx, pods, client.InNamespace(req.Namespace), client.MatchingLabels(rs.Spec.Template.Labels))
 	helperPodName := fmt.Sprintf("%s-%s", owner, name)
 
-	listOpts := []client.ListOption{
-		client.InNamespace(instance.Namespace),
-		//client.InNamespace(req.Namespace),
-		//client.MatchingLabels(labelsForMemcached(instance.Name)),
-		client.MatchingFields{"metadata.name": helperPodName},
-	}
+	err := r.Client.Get(ctx, types.NamespacedName{Name: helperPodName, Namespace: instance.Namespace}, helperPod)
+	if err != nil && errors.IsNotFound(err) {
+		// Create helper-pod : API call to mini-cloud-server Controller
+		// TODO: migrate CR controller to mini-cloud-server controller
 
-	if err := r.List(ctx, helperPod, listOpts...); err != nil {
-		log.Log.Error(err, "unable to list helper pod", "metadata.name", helperPodName)
-		return ctrl.Result{}, err
+		log.Log.Info("Creating a new Instance(helper pod)", "helperPod.name", helperPodName)
+		newInstance := PostInstance(instance)
+		//if err != nil {
+		//	log.Log.Error(err, "Failed to create new Instance", "instance.Name", instance.Name, "helperPod.name", helperPodName)
+		//	return reconcile.Result{}, err
+		//}
+
+		// Helper-pod created successfully - return and requeue
+		log.Log.Info("Success to create new Instance", "instance UUID", newInstance.UUID)
+		return reconcile.Result{Requeue: true}, nil
+	} else if err != nil {
+		log.Log.Error(err, "Failed to get helper-pod")
+		return reconcile.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// PostInstance create a request(create new instance) to mini-cloud-server Controller.
+func PostInstance(instance boanlabv1.Instance) minicloudControllerType.InstanceCreationResponse {
+	postRequest := minicloudControllerType.InstanceCreationRequest{
+		Name:        instance.Name,
+		Owner:       instance.Spec.Environment.Owner,
+		Description: "post request from k8s",
+		Os:          instance.Spec.Environment.Os,
+		CpuSize:     instance.Spec.Resource.CpuLimit,
+		RamSize:     instance.Spec.Resource.RamLimit,
+		DiskSize:    instance.Spec.Resource.DiskLimit,
+	}
+
+	// load minicloud-Controller server info from env
+	// TODO: add to k8s yaml file
+	// TODO: migrate to main.go or misc/env.go
+	hostIP := os.Getenv("NEBULA_REST_API_HOST_IP")
+	hostPort := os.Getenv("NEBULA_REST_API_HOST_PORT")
+
+	url := "http://" + hostIP + ":" + hostPort + "/note"
+
+	// post request to minicloud-Controller serve
+	buf, _ := json.Marshal(postRequest)
+	response, err := http.Post(url, "application/json", bytes.NewBuffer(buf))
+	if err != nil {
+		log.Log.Error(err, "Cannot send [post] instance creation to Server ...")
+	}
+
+	var createdInstance minicloudControllerType.InstanceCreationResponse
+	err = json.NewDecoder(response.Body).Decode(&instance)
+	if err != nil {
+		log.Log.Error(err, "Error decoding JSON response")
+	}
+
+	return createdInstance
 }
 
 // SetupWithManager sets up the controller with the Manager.
