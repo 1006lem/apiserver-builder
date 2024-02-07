@@ -80,6 +80,7 @@ func (in *Instance) NamespaceScoped() bool {
 }
 
 func (in *Instance) New() runtime.Object {
+
 	return &Instance{}
 }
 
@@ -112,9 +113,9 @@ func (in *InstanceList) GetListMeta() *metav1.ListMeta {
 
 // InstanceStatus defines the observed state of Instance
 type InstanceStatus struct {
-	InstanceID string     `json:"instanceID,omitempty"`
-	Status     string     `json:"status,omitempty"`
-	Snapshots  []Snapshot `json:"snapshots"`
+	InstanceID string `json:"instanceID,omitempty"`
+	//Status     string     `json:"status,omitempty"`
+	Snapshots []Snapshot `json:"snapshots"`
 }
 
 type Snapshot struct {
