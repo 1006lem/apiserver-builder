@@ -52,45 +52,58 @@ type InstanceReconciler struct {
 func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
 
-	// load instance
+	// Load instance
 	var instance boanlabv1.Instance
-	if err := r.Get(ctx, req.NamespacedName, &instance); err != nil {
-		log.Log.Error(err, "unable to fetch Instance")
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	err := r.Get(ctx, req.NamespacedName, &instance)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			log.Log.Error(err, "unable to fetch Instance")
+			return reconcile.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
+		log.Log.Error(err, "Failed to get Instance")
+		return reconcile.Result{}, err
+		//return ctrl.Result{}, client.IgnoreNotFound(err)
+		//return reconcile.Result{}, nil
 	}
 
-	// find helper-pod
+	// Find helper-pod
 	helperPod := &corev1.Pod{}
 	var owner = instance.Spec.Environment.Owner
 	var name = instance.Name
 	// err = a.List(ctx, pods, client.InNamespace(req.Namespace), client.MatchingLabels(rs.Spec.Template.Labels))
 	helperPodName := fmt.Sprintf("%s-%s", owner, name)
 
-	err := r.Client.Get(ctx, types.NamespacedName{Name: helperPodName, Namespace: instance.Namespace}, helperPod)
+	err = r.Client.Get(ctx, types.NamespacedName{Name: helperPodName, Namespace: instance.Namespace}, helperPod)
 	if err != nil && errors.IsNotFound(err) {
 		// Create helper-pod : API call to mini-cloud-server Controller
 		// TODO: migrate CR controller to mini-cloud-server controller
 
-		log.Log.Info("Creating a new Instance(helper pod)", "helperPod.name", helperPodName)
-		newInstance := PostInstance(instance)
-		//if err != nil {
-		//	log.Log.Error(err, "Failed to create new Instance", "instance.Name", instance.Name, "helperPod.name", helperPodName)
-		//	return reconcile.Result{}, err
-		//}
+		log.Log.Info("Creating a new Instance(helper p od)", "helperPod.name", helperPodName)
+		newInstance, err := r.PostInstance(instance)
+		if err != nil {
+			log.Log.Error(err, "Failed to create new Instance", "instance.Name", instance.Name, "helperPod.name", helperPodName)
+			return reconcile.Result{}, err
+		}
 
 		// Helper-pod created successfully - return and requeue
 		log.Log.Info("Success to create new Instance", "instance UUID", newInstance.UUID)
+
+		// Update Status Subresource (InstanceID)
+		instance.Status.InstanceID = newInstance.UUID
+
 		return reconcile.Result{Requeue: true}, nil
 	} else if err != nil {
 		log.Log.Error(err, "Failed to get helper-pod")
 		return reconcile.Result{}, err
 	}
 
+	// Stop reconcile
 	return ctrl.Result{}, nil
 }
 
 // PostInstance create a request(create new instance) to mini-cloud-server Controller.
-func PostInstance(instance boanlabv1.Instance) minicloudControllerType.InstanceCreationResponse {
+func (r *InstanceReconciler) PostInstance(instance boanlabv1.Instance) (*minicloudControllerType.InstanceCreationResponse, error) {
 	postRequest := minicloudControllerType.InstanceCreationRequest{
 		Name:        instance.Name,
 		Owner:       instance.Spec.Environment.Owner,
@@ -113,16 +126,18 @@ func PostInstance(instance boanlabv1.Instance) minicloudControllerType.InstanceC
 	buf, _ := json.Marshal(postRequest)
 	response, err := http.Post(url, "application/json", bytes.NewBuffer(buf))
 	if err != nil {
-		log.Log.Error(err, "Cannot send [post] instance creation to Server ...")
+		//log.Log.Error(err, "Cannot send [post] instance creation to Server ...")
+		return nil, err
 	}
 
 	var createdInstance minicloudControllerType.InstanceCreationResponse
-	err = json.NewDecoder(response.Body).Decode(&instance)
+	err = json.NewDecoder(response.Body).Decode(&createdInstance)
 	if err != nil {
-		log.Log.Error(err, "Error decoding JSON response")
+		return nil, err
+		//log.Log.Error(err, "Error decoding JSON response")
 	}
 
-	return createdInstance
+	return &createdInstance, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
